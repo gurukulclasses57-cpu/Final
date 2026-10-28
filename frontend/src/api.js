@@ -1,7 +1,14 @@
 import axios from 'axios';
 import { STORAGE_KEY } from './auth/AuthContext';
 
-const BASE = process.env.REACT_APP_BACKEND_URL;
+const getBackendBaseUrl = () => {
+  const configured = (process.env.REACT_APP_BACKEND_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin.replace(/\/+$/, '');
+  return 'http://localhost:8000';
+};
+
+const BASE = getBackendBaseUrl();
 const API = `${BASE}/api`;
 
 const http = axios.create({ baseURL: API, timeout: 20000 });

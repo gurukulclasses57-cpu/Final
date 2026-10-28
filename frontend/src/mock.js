@@ -1,8 +1,15 @@
+const getBackendBaseUrl = () => {
+  const configured = (process.env.REACT_APP_BACKEND_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin.replace(/\/+$/, '');
+  return 'http://localhost:8000';
+};
+
 // Default site values. These are hydrated from the backend /api/site-settings when available.
 export const resolveBackendUrl = (value) => {
   if (!value) return '';
   if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:')) return value;
-  if (value.startsWith('/')) return `${process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000'}${value}`;
+  if (value.startsWith('/')) return `${getBackendBaseUrl()}${value}`;
   return value;
 };
 

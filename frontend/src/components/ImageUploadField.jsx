@@ -5,14 +5,21 @@ import { Button } from './ui/button';
 import { Upload, Loader2, X, Link as LinkIcon } from 'lucide-react';
 import { STORAGE_KEY } from '../auth/AuthContext';
 
-const BASE = process.env.REACT_APP_BACKEND_URL;
+const getBackendBaseUrl = () => {
+  const configured = (process.env.REACT_APP_BACKEND_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin.replace(/\/+$/, '');
+  return 'http://localhost:8000';
+};
+
+const BASE = getBackendBaseUrl();
 const API = `${BASE}/api`;
 
 // Resolve a URL — relative `/api/uploads/...` paths get prefixed with backend host
 export const resolveUrl = (u) => {
   if (!u) return '';
   if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:')) return u;
-  if (u.startsWith('/')) return `${BASE}${u}`;
+  if (u.startsWith('/')) return `${getBackendBaseUrl()}${u}`;
   return u;
 };
 

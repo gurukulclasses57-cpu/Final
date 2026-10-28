@@ -38,6 +38,58 @@ ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'im
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 load_dotenv(ROOT_DIR / '.env')
 
+VERCEL_RUNTIME = bool(os.environ.get('VERCEL'))
+AWS_S3_BUCKET = os.environ.get('AWS_S3_BUCKET') or os.environ.get('S3_BUCKET')
+AWS_REGION = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
+AWS_S3_PUBLIC_BASE_URL = (os.environ.get('AWS_S3_PUBLIC_BASE_URL') or os.environ.get('S3_PUBLIC_BASE_URL') or '').strip().rstrip('/')
+
+
+def can_store_uploads_locally() -> bool:
+    return not VERCEL_RUNTIME or os.access(UPLOAD_DIR, os.W_OK)
+
+
+def build_public_upload_url(filename: str) -> str:
+    if AWS_S3_PUBLIC_BASE_URL:
+        return f'{AWS_S3_PUBLIC_BASE_URL}/{filename}'
+    if AWS_S3_BUCKET:
+        return f'https://{AWS_S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/uploads/{filename}'
+    return f'/api/uploads/{filename}'
+
+
+def save_uploaded_file(filename: str, contents: bytes, content_type: str) -> str:
+    if AWS_S3_BUCKET:
+        try:
+            import boto3
+            s3 = boto3.client(
+                's3',
+                region_name=AWS_REGION,
+                aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+                aws_session_token=os.environ.get('AWS_SESSION_TOKEN'),
+            )
+            key = f'uploads/{filename}'
+            s3.put_object(
+                Bucket=AWS_S3_BUCKET,
+                Key=key,
+                Body=contents,
+                ContentType=content_type,
+                ACL='public-read',
+            )
+            return build_public_upload_url(filename)
+        except Exception as exc:  # pragma: no cover - depends on cloud credentials
+            logger.warning('S3 upload failed, falling back to local storage: %s', exc)
+
+    if not can_store_uploads_locally():
+        raise HTTPException(
+            status_code=500,
+            detail='Vercel serverless deployments cannot persist uploaded files locally. Configure AWS_S3_BUCKET / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY or another object-storage backend.',
+        )
+
+    fpath = UPLOAD_DIR / filename
+    with open(fpath, 'wb') as f:
+        f.write(contents)
+    return build_public_upload_url(filename)
+
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('DB_NAME', 'njeduhub')
 
@@ -684,10 +736,8 @@ async def upload_image(file: UploadFile = File(...), _: str = Depends(require_ad
     if len(ext) > 8 or not ext.isalnum():
         ext = 'jpg'
     fname = f'{uuid.uuid4().hex}.{ext}'
-    fpath = UPLOAD_DIR / fname
-    with open(fpath, 'wb') as f:
-        f.write(contents)
-    return {'url': f'/api/uploads/{fname}', 'filename': fname, 'size': len(contents)}
+    public_url = save_uploaded_file(fname, contents, file.content_type or 'application/octet-stream')
+    return {'url': public_url, 'filename': fname, 'size': len(contents)}
 
 # ---------- Generic CRUD factory ----------
 def build_crud(path: str, collection: str, model):
