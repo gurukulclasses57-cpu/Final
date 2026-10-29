@@ -11,12 +11,17 @@ def _env_flag(name: str, default: str = '1') -> bool:
     val = os.environ.get(name, default)
     return str(val).strip().lower() not in {'0', 'false', 'no', 'off', ''}
 
-USE_MOCK_DB = _env_flag('USE_MOCK_DB', '1')
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+VERCEL_RUNTIME = bool(os.environ.get('VERCEL'))
+USE_MOCK_DB = _env_flag('USE_MOCK_DB', '0' if VERCEL_RUNTIME else '1')
 
 try:
     from .auth import (
@@ -31,17 +36,34 @@ except ImportError:  # pragma: no cover - support running as a script from backe
         ensure_default_admin, require_admin,
     )
 
-ROOT_DIR = Path(__file__).parent
 UPLOAD_DIR = ROOT_DIR / 'uploads'
 UPLOAD_DIR.mkdir(exist_ok=True)
 ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-load_dotenv(ROOT_DIR / '.env')
 
-VERCEL_RUNTIME = bool(os.environ.get('VERCEL'))
 AWS_S3_BUCKET = os.environ.get('AWS_S3_BUCKET') or os.environ.get('S3_BUCKET')
 AWS_REGION = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
 AWS_S3_PUBLIC_BASE_URL = (os.environ.get('AWS_S3_PUBLIC_BASE_URL') or os.environ.get('S3_PUBLIC_BASE_URL') or '').strip().rstrip('/')
+
+
+def verify_runtime_requirements() -> None:
+    vercel_runtime = bool(os.environ.get('VERCEL'))
+    mock_db_enabled = _env_flag('USE_MOCK_DB', '0' if vercel_runtime else '1')
+    mongo_env = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI')
+    s3_bucket = os.environ.get('AWS_S3_BUCKET') or os.environ.get('S3_BUCKET')
+    s3_public_base_url = (os.environ.get('AWS_S3_PUBLIC_BASE_URL') or os.environ.get('S3_PUBLIC_BASE_URL') or '').strip().rstrip('/')
+
+    if not vercel_runtime:
+        return
+
+    if mock_db_enabled:
+        raise RuntimeError('Vercel deployment cannot use mock DB storage. Set USE_MOCK_DB=0 and configure MONGO_URL.')
+
+    if not mongo_env:
+        raise RuntimeError('Vercel deployment requires MONGO_URL (MongoDB Atlas / Cosmos / hosted Mongo) to persist app data.')
+
+    if not s3_bucket and not s3_public_base_url:
+        raise RuntimeError('Vercel deployment requires AWS_S3_BUCKET or S3_PUBLIC_BASE_URL for image uploads, plus AWS credentials if using S3.')
 
 
 def can_store_uploads_locally() -> bool:
@@ -90,7 +112,7 @@ def save_uploaded_file(filename: str, contents: bytes, content_type: str) -> str
         f.write(contents)
     return build_public_upload_url(filename)
 
-mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+mongo_url = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or ('mongodb://localhost:27017' if not VERCEL_RUNTIME else '')
 db_name = os.environ.get('DB_NAME', 'njeduhub')
 
 def create_db_client():
@@ -1156,6 +1178,7 @@ async def seed_public():
 @app.on_event('startup')
 async def on_start():
     global client, db
+    verify_runtime_requirements()
     try:
         await ensure_default_admin(db)
     except Exception:
